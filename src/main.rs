@@ -1,7 +1,8 @@
+use serde::Serialize;
+use serde_json::{Result, Value};
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use std::sync::{Arc, Mutex};
-
 use warp::Filter;
 #[tokio::main]
 async fn main() {
@@ -15,57 +16,66 @@ async fn main() {
         .map(move |p: HashMap<String, String>| {
             let x = p.get("x").unwrap().parse::<f32>().unwrap();
             let y = p.get("y").unwrap().parse::<f32>().unwrap();
-            let vector_change_speed = p
-                .get("vector_change_speed")
-                .unwrap()
-                .parse::<f32>()
-                .unwrap();
-            let mut robot_init_guard = robot_init_clone.lock().unwrap();
 
-            let movement = calculate((x, y), vector_change_speed, 45.0, -45.0, -135.0, 135.0);
+            let movement_left = calculate((x, y), WheelRollDirection::Lefty).unwrap();
+            let movement_right = calculate((x, y), WheelRollDirection::Righty).unwrap();
+            let movements = (movement_right, movement_left);
 
-            format!("{:?}", movement)
+            warp::reply::json(&movements)
         });
 
     warp::serve(hello).run(([127, 0, 0, 1], 5432)).await;
 }
 
-#[derive(Debug)]
+enum WheelRollDirection {
+    Righty = 1,
+    Lefty = 2,
+    Fallback = 0,
+}
+
+impl WheelRollDirection {
+    fn value(num: isize) -> WheelRollDirection {
+        match num {
+            1 => WheelRollDirection::Righty,
+            2 => WheelRollDirection::Lefty,
+            _ => WheelRollDirection::Fallback,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct OmniWheelMovement {
     top_left: f32,
     top_right: f32,
     bottom_right: f32,
     bottom_left: f32,
 }
-fn calculate(
-    gamepad: (f32, f32),
-    vector_change_speed: f32,
-    current_angle_top_left: f32,
-    current_angle_top_right: f32,
-    current_angle_bottom_right: f32,
-    current_angle_bottom_left: f32,
-) -> OmniWheelMovement {
-    let theta = gamepad.1.atan2(gamepad.0);
-    let theta = theta.to_degrees();
-    // take stand still state, convert through wheel movement into the correct end position
-    // first, compare each current angle value
-    // to theta and find the difference
-    println!("Theta: {}", theta);
-    let angle_difference_top_left = theta - current_angle_top_left;
-    let angle_difference_top_right = theta - current_angle_top_right;
-    let angle_difference_bottom_right = theta - current_angle_bottom_right;
-    let angle_difference_bottom_left = theta - current_angle_bottom_left;
 
-    let ng_diff_vect_top_left = angle_difference_top_left * vector_change_speed;
-    let ng_diff_vect_top_right = angle_difference_top_right * vector_change_speed;
-    let ng_diff_vect_bottom_right = angle_difference_bottom_right * vector_change_speed;
-    let ng_diff_vect_bottom_left = angle_difference_bottom_left * vector_change_speed;
+fn calculate(gamepad: (f32, f32), direction: WheelRollDirection) -> Option<OmniWheelMovement> {
+    let freewheel: (f32, f32) = (gamepad.0, gamepad.0);
 
-    // TODO: Deal with exceptions where wheels cant produce angle
-    OmniWheelMovement {
-        top_left: ng_diff_vect_top_left,
-        top_right: ng_diff_vect_top_right,
-        bottom_right: ng_diff_vect_bottom_right,
-        bottom_left: ng_diff_vect_bottom_left,
-    }
+    // sets for lefty
+    let gamepad_mult: (f32, f32, f32) = (gamepad.0, freewheel.0, -freewheel.1);
+
+    let magnitude: f32 = match direction {
+        WheelRollDirection::Lefty => gamepad.1 - gamepad_mult.2,
+        WheelRollDirection::Righty => gamepad.1 - freewheel.1,
+        WheelRollDirection::Fallback => 0.0,
+    };
+
+    return match direction {
+        WheelRollDirection::Righty => Some(OmniWheelMovement {
+            top_left: 0.0,
+            top_right: magnitude,
+            bottom_right: 0.0,
+            bottom_left: magnitude,
+        }),
+        WheelRollDirection::Lefty => Some(OmniWheelMovement {
+            top_left: magnitude,
+            top_right: 0.0,
+            bottom_right: magnitude,
+            bottom_left: 0.0,
+        }),
+        WheelRollDirection::Fallback => None,
+    };
 }
